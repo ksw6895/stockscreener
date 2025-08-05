@@ -296,7 +296,7 @@ graph TD
         
         FCFY --> FCFYM[FCF/시가총액<br/>FCF/Market Cap<br/>목표/Target ≥ 4%]
         
-        PEG --> PEGM[PER/(성장률×100)<br/>P/E/(Growth×100)<br/>이상적/Ideal < 1.0]
+        PEG --> PEGM["PER/(성장률×100)<br/>P/E/(Growth×100)<br/>이상적/Ideal < 1.0"]
     end
 ```
 
