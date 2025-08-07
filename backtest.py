@@ -312,11 +312,28 @@ async def fetch_historical_financial_data(session: aiohttp.ClientSession, symbol
             data = await task
             
             # Filter data to only include reports filed before backtest date
-            if isinstance(data, list) and data and 'fillingDate' in data[0]:
-                filtered_data = [item for item in data if item.get('fillingDate', '9999-12-31') <= backtest_date_str]
-                results[key] = filtered_data
+            # Also consider reportedDate for more accurate point-in-time constraints
+            if isinstance(data, list) and data:
+                if 'fillingDate' in data[0]:
+                    # Use fillingDate as primary filter, reportedDate as secondary
+                    filtered_data = []
+                    for item in data:
+                        filling_date = item.get('fillingDate', '9999-12-31')
+                        reported_date = item.get('reportedDate', item.get('date', filling_date))
+                        # Use the earlier of filling or reported date for conservative filtering
+                        cutoff_date = min(filling_date, reported_date)
+                        if cutoff_date <= backtest_date_str:
+                            filtered_data.append(item)
+                    results[key] = filtered_data
+                elif 'date' in data[0]:
+                    # For data with only date field
+                    filtered_data = [item for item in data if item.get('date', '9999-12-31') <= backtest_date_str]
+                    results[key] = filtered_data
+                else:
+                    # For data without any date fields
+                    results[key] = data
             else:
-                # For data without filing dates or non-list data
+                # For non-list data
                 results[key] = data
                 
         except Exception as e:
@@ -364,7 +381,8 @@ async def fetch_historical_prices(stocks: List[StockAnalysisResult],
     
     # Calculate minimum acceptable data points (e.g., at least 80% of the expected period)
     days_in_period = (end_date - start_date).days
-    min_data_points = int(days_in_period * 0.6)  # Accounting for weekends and holidays
+    # Assuming ~252 trading days per year, weekends and holidays reduce days by ~30%
+    min_data_points = int(days_in_period * 0.7)  # More strict requirement for data quality
     
     # Set up HTTP session
     connector = aiohttp.TCPConnector(limit=5)
@@ -391,7 +409,12 @@ async def fetch_historical_prices(stocks: List[StockAnalysisResult],
                 if len(historical_data) >= min_data_points:
                     # Verify data quality by checking for outliers or zeros
                     has_valid_data = True
-                    close_prices = [data.get('close', 0) for data in historical_data]
+                    # Use adjusted close if available, otherwise use close
+                    close_prices = []
+                    for data in historical_data:
+                        # Prefer adjusted close for splits and dividends
+                        price = data.get('adjClose', data.get('close', 0))
+                        close_prices.append(price)
                     
                     # Check for too many zeros or identical values
                     zero_count = sum(1 for price in close_prices if price == 0)
@@ -432,8 +455,103 @@ async def fetch_historical_prices(stocks: List[StockAnalysisResult],
     return historical_prices
 
 
+def calculate_risk_metrics(returns: List[float], risk_free_rate: float = 0.04) -> Dict[str, float]:
+    """
+    Calculate risk metrics for a portfolio
+    
+    Args:
+        returns: List of daily returns (as decimals, not percentages)
+        risk_free_rate: Annual risk-free rate (default 4% for T-bills)
+        
+    Returns:
+        Dictionary containing various risk metrics
+    """
+    if not returns or len(returns) < 2:
+        return {
+            'volatility': 0,
+            'sharpe_ratio': 0,
+            'sortino_ratio': 0,
+            'max_drawdown': 0,
+            'calmar_ratio': 0
+        }
+    
+    # Convert to numpy array for easier calculation
+    returns_array = np.array(returns)
+    
+    # Calculate annualized volatility (assuming 252 trading days)
+    daily_volatility = np.std(returns_array)
+    annualized_volatility = daily_volatility * np.sqrt(252)
+    
+    # Calculate Sharpe Ratio
+    mean_return = np.mean(returns_array)
+    annualized_return = (1 + mean_return) ** 252 - 1
+    daily_risk_free = (1 + risk_free_rate) ** (1/252) - 1
+    excess_return = mean_return - daily_risk_free
+    sharpe_ratio = np.sqrt(252) * excess_return / daily_volatility if daily_volatility > 0 else 0
+    
+    # Calculate Sortino Ratio (downside deviation)
+    downside_returns = returns_array[returns_array < 0]
+    downside_deviation = np.std(downside_returns) if len(downside_returns) > 0 else 0
+    sortino_ratio = np.sqrt(252) * excess_return / downside_deviation if downside_deviation > 0 else 0
+    
+    # Calculate Maximum Drawdown
+    cumulative_returns = np.cumprod(1 + returns_array)
+    running_max = np.maximum.accumulate(cumulative_returns)
+    drawdown = (cumulative_returns - running_max) / running_max
+    max_drawdown = np.min(drawdown)
+    
+    # Calculate Calmar Ratio (annualized return / max drawdown)
+    calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown != 0 else 0
+    
+    return {
+        'volatility': annualized_volatility,
+        'sharpe_ratio': sharpe_ratio,
+        'sortino_ratio': sortino_ratio,
+        'max_drawdown': max_drawdown,
+        'calmar_ratio': calmar_ratio,
+        'annualized_return': annualized_return
+    }
+
+
+async def fetch_benchmark_data(start_date: datetime.datetime, end_date: datetime.datetime) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch benchmark index data (S&P 500 and NASDAQ)
+    
+    Args:
+        start_date: Start date for historical data
+        end_date: End date for historical data
+        
+    Returns:
+        Dictionary with benchmark historical price data
+    """
+    # Format dates for API
+    start_str = start_date.strftime('%Y-%m-%d')
+    end_str = end_date.strftime('%Y-%m-%d')
+    
+    benchmarks = {}
+    
+    # Set up HTTP session
+    connector = aiohttp.TCPConnector(limit=2)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        # Fetch S&P 500 (SPY ETF as proxy)
+        spy_url = f"{api_client.base_url_v3}/historical-price-full/SPY?from={start_str}&to={end_str}&apikey={api_client.api_key}"
+        spy_data = await api_client.fetch(session, spy_url)
+        if spy_data and 'historical' in spy_data:
+            benchmarks['SPY'] = list(reversed(spy_data['historical']))
+            logging.info(f"Retrieved {len(benchmarks['SPY'])} data points for S&P 500 (SPY)")
+        
+        # Fetch NASDAQ (QQQ ETF as proxy)
+        qqq_url = f"{api_client.base_url_v3}/historical-price-full/QQQ?from={start_str}&to={end_str}&apikey={api_client.api_key}"
+        qqq_data = await api_client.fetch(session, qqq_url)
+        if qqq_data and 'historical' in qqq_data:
+            benchmarks['QQQ'] = list(reversed(qqq_data['historical']))
+            logging.info(f"Retrieved {len(benchmarks['QQQ'])} data points for NASDAQ (QQQ)")
+    
+    return benchmarks
+
+
 def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, Any]]],
-                                   stocks: List[StockAnalysisResult]) -> Tuple[Dict[str, List[float]], List[datetime.datetime], List[float]]:
+                                   stocks: List[StockAnalysisResult]) -> Tuple[Dict[str, List[float]], List[datetime.datetime], List[float], List[float]]:
     """
     Calculate the performance of each stock and the overall portfolio
     
@@ -442,17 +560,17 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
         stocks: List of stock analysis results
         
     Returns:
-        Tuple of (stock_performances, dates, portfolio_performance)
+        Tuple of (stock_performances, dates, portfolio_performance, daily_returns)
     """
     if not historical_prices:
-        return {}, [], []
+        return {}, [], [], []
     
     # Filter stocks to include only those with historical price data
     valid_stocks = [stock for stock in stocks if stock.symbol in historical_prices]
     
     if not valid_stocks:
         logging.error("No valid stocks with historical price data")
-        return {}, [], []
+        return {}, [], [], []
     
     # Determine the common date range across all stocks
     common_dates = set()
@@ -463,8 +581,16 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
         if symbol not in [stock.symbol for stock in valid_stocks]:
             continue
             
-        # Extract dates for this symbol
-        symbol_dates = {datetime.datetime.strptime(price['date'], '%Y-%m-%d').date() for price in prices}
+        # Extract dates for this symbol (ensure consistent datetime handling)
+        symbol_dates = set()
+        for price in prices:
+            try:
+                # Parse date and keep as date object for consistency
+                date_obj = datetime.datetime.strptime(price['date'], '%Y-%m-%d').date()
+                symbol_dates.add(date_obj)
+            except (ValueError, KeyError) as e:
+                logging.warning(f"Invalid date format in price data for {symbol}: {e}")
+                continue
         
         if first_symbol:
             common_dates = symbol_dates
@@ -476,7 +602,7 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
     
     if not common_dates:
         logging.error("No common dates found across stocks with valid price data")
-        return {}, [], []
+        return {}, [], [], []
     
     # Calculate performance for each stock relative to the first date
     stock_performances = {}
@@ -485,14 +611,17 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
         # Create a mapping of date to price for easy lookup
         date_to_price = {datetime.datetime.strptime(price['date'], '%Y-%m-%d').date(): price for price in prices}
         
-        # Get the initial price
-        start_price = date_to_price[common_dates[0]]['close']
+        # Get the initial price (prefer adjusted close)
+        start_price_data = date_to_price[common_dates[0]]
+        start_price = start_price_data.get('adjClose', start_price_data.get('close', 0))
         
         # Calculate performance for each common date
         performance = []
         for date in common_dates:
             if date in date_to_price:
-                price = date_to_price[date]['close']
+                price_data = date_to_price[date]
+                # Use adjusted close if available
+                price = price_data.get('adjClose', price_data.get('close', 0))
                 perf = (price / start_price - 1) * 100  # Percentage change
                 performance.append(perf)
             else:
@@ -503,6 +632,7 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
     
     # Calculate overall portfolio performance (equal weight)
     portfolio_performance = []
+    portfolio_values = []  # Track portfolio values for daily returns calculation
     
     for i in range(len(common_dates)):
         # Get performance of all stocks for this date
@@ -512,10 +642,20 @@ def calculate_portfolio_performance(historical_prices: Dict[str, List[Dict[str, 
             # Equal-weighted portfolio
             portfolio_perf = sum(date_perfs) / len(date_perfs)
             portfolio_performance.append(portfolio_perf)
+            # Calculate portfolio value (starting at 1.0)
+            portfolio_values.append(1.0 + portfolio_perf / 100)
         else:
             portfolio_performance.append(None)
+            portfolio_values.append(None)
     
-    return stock_performances, common_dates, portfolio_performance
+    # Calculate daily returns
+    daily_returns = []
+    for i in range(1, len(portfolio_values)):
+        if portfolio_values[i] is not None and portfolio_values[i-1] is not None:
+            daily_return = (portfolio_values[i] / portfolio_values[i-1]) - 1
+            daily_returns.append(daily_return)
+    
+    return stock_performances, common_dates, portfolio_performance, daily_returns
 
 
 def generate_performance_graphs(stock_performances: Dict[str, List[float]], 
@@ -664,7 +804,10 @@ def generate_wealth_growth_graph(portfolio_performance: List[float],
 
 def generate_backtest_summary(stocks: List[StockAnalysisResult], 
                             stock_performances: Dict[str, List[float]], 
-                            portfolio_performance: List[float], 
+                            portfolio_performance: List[float],
+                            daily_returns: List[float],
+                            risk_metrics: Dict[str, float],
+                            benchmark_performance: Optional[Dict[str, float]],
                             start_date: datetime.datetime,
                             initial_investment: float) -> str:
     """
@@ -674,6 +817,9 @@ def generate_backtest_summary(stocks: List[StockAnalysisResult],
         stocks: List of stock analysis results
         stock_performances: Dictionary of performance data by symbol
         portfolio_performance: List of portfolio performance values
+        daily_returns: List of daily returns
+        risk_metrics: Dictionary of risk metrics
+        benchmark_performance: Optional benchmark performance data
         start_date: Start date of the backtest
         initial_investment: Initial investment amount
         
@@ -728,6 +874,24 @@ def generate_backtest_summary(stocks: List[StockAnalysisResult],
         f.write(f"Overall Return: {final_portfolio_performance:.2f}%\n")
         f.write(f"Final Portfolio Value: ${final_portfolio_value:,.2f}\n")
         f.write(f"Profit/Loss: ${final_portfolio_value - initial_investment:,.2f}\n\n")
+        
+        f.write(f"Risk Metrics:\n")
+        f.write(f"---------------------\n")
+        if risk_metrics:
+            f.write(f"Annualized Return: {risk_metrics.get('annualized_return', 0)*100:.2f}%\n")
+            f.write(f"Annualized Volatility: {risk_metrics.get('volatility', 0)*100:.2f}%\n")
+            f.write(f"Sharpe Ratio: {risk_metrics.get('sharpe_ratio', 0):.3f}\n")
+            f.write(f"Sortino Ratio: {risk_metrics.get('sortino_ratio', 0):.3f}\n")
+            f.write(f"Maximum Drawdown: {risk_metrics.get('max_drawdown', 0)*100:.2f}%\n")
+            f.write(f"Calmar Ratio: {risk_metrics.get('calmar_ratio', 0):.3f}\n\n")
+        
+        if benchmark_performance:
+            f.write(f"Benchmark Comparison:\n")
+            f.write(f"---------------------\n")
+            f.write(f"S&P 500 (SPY) Return: {benchmark_performance.get('SPY', 0):.2f}%\n")
+            f.write(f"NASDAQ (QQQ) Return: {benchmark_performance.get('QQQ', 0):.2f}%\n")
+            f.write(f"Alpha vs S&P 500: {final_portfolio_performance - benchmark_performance.get('SPY', 0):.2f}%\n")
+            f.write(f"Alpha vs NASDAQ: {final_portfolio_performance - benchmark_performance.get('QQQ', 0):.2f}%\n\n")
         
         # Calculate and display best and worst performers
         if final_performances:
@@ -798,13 +962,29 @@ async def run_complete_backtest(lookback_period: str, initial_investment: float 
         return {"error": "Insufficient stocks with valid price history (need at least 5)"}
     
     # Calculate performance
-    stock_performances, dates, portfolio_performance = calculate_portfolio_performance(
+    stock_performances, dates, portfolio_performance, daily_returns = calculate_portfolio_performance(
         historical_prices, top_stocks
     )
     
     if not dates or not portfolio_performance:
         logging.error("Failed to calculate portfolio performance")
         return {"error": "Failed to calculate portfolio performance"}
+    
+    # Calculate risk metrics
+    risk_metrics = calculate_risk_metrics(daily_returns)
+    logging.info(f"Risk Metrics - Sharpe: {risk_metrics['sharpe_ratio']:.3f}, Max Drawdown: {risk_metrics['max_drawdown']*100:.2f}%")
+    
+    # Fetch benchmark data for comparison
+    benchmark_prices = await fetch_benchmark_data(backtest_date, datetime.datetime.now())
+    benchmark_performance = {}
+    
+    if benchmark_prices:
+        for symbol, prices in benchmark_prices.items():
+            if prices and len(prices) > 1:
+                start_price = prices[0]['close']
+                end_price = prices[-1]['close']
+                benchmark_performance[symbol] = (end_price / start_price - 1) * 100
+                logging.info(f"Benchmark {symbol} return: {benchmark_performance[symbol]:.2f}%")
     
     # Generate graphs
     individual_graph_path, portfolio_graph_path = generate_performance_graphs(
@@ -818,7 +998,8 @@ async def run_complete_backtest(lookback_period: str, initial_investment: float 
     
     # Generate summary report
     summary_path = generate_backtest_summary(
-        top_stocks, stock_performances, portfolio_performance, backtest_date, initial_investment
+        top_stocks, stock_performances, portfolio_performance, daily_returns, 
+        risk_metrics, benchmark_performance, backtest_date, initial_investment
     )
     
     # Return all generated file paths
