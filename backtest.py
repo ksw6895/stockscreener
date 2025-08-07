@@ -7,6 +7,7 @@ import datetime
 from typing import Dict, List, Any, Optional, Tuple
 import statistics
 import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend before importing pyplot
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
@@ -123,6 +124,16 @@ async def screen_stocks_historical(backtest_date: datetime.datetime) -> Tuple[Li
             profile = symbol_profile_map.get(symbol)
             
             if not profile:
+                continue
+            
+            # Skip mutual funds and ETFs (typically have 5-letter symbols ending in X)
+            # Also skip if no exchange info or if it's MUTUAL_FUND
+            exchange_type = profile.get('exchangeShortName', '')
+            if len(symbol) == 5 and symbol[-1] == 'X':
+                logging.debug(f"Skipping {symbol}: Likely mutual fund")
+                continue
+            if 'MUTUAL' in exchange_type.upper() or 'FUND' in exchange_type.upper():
+                logging.debug(f"Skipping {symbol}: Mutual fund or ETF")
                 continue
                 
             market_cap = profile.get('mktCap')
@@ -379,10 +390,14 @@ async def fetch_historical_prices(stocks: List[StockAnalysisResult],
     historical_prices = {}
     valid_stocks = []
     
-    # Calculate minimum acceptable data points (e.g., at least 80% of the expected period)
+    # Calculate minimum acceptable data points
     days_in_period = (end_date - start_date).days
-    # Assuming ~252 trading days per year, weekends and holidays reduce days by ~30%
-    min_data_points = int(days_in_period * 0.7)  # More strict requirement for data quality
+    # Assuming ~252 trading days per year (365 * 0.69 ≈ 252)
+    # For 1 year: ~250 trading days, 6 months: ~125, 3 months: ~63
+    trading_days_ratio = 250 / 365  # Approximately 0.685
+    expected_trading_days = int(days_in_period * trading_days_ratio)
+    # Require at least 95% of expected trading days (accounting for holidays)
+    min_data_points = int(expected_trading_days * 0.95)
     
     # Set up HTTP session
     connector = aiohttp.TCPConnector(limit=5)
@@ -439,7 +454,7 @@ async def fetch_historical_prices(stocks: List[StockAnalysisResult],
                     else:
                         logging.warning(f"Data quality issues for {symbol}, skipping")
                 else:
-                    logging.warning(f"Insufficient data points for {symbol}: got {len(historical_data)}, need {min_data_points}")
+                    logging.info(f"Insufficient data points for {symbol}: got {len(historical_data)}, need at least {min_data_points} (expected ~{expected_trading_days} trading days)")
             else:
                 logging.warning(f"Failed to retrieve historical data for {symbol}")
     
