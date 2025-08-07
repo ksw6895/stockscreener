@@ -1,5 +1,7 @@
 # Enhanced NASDAQ Stock Screener
 
+[한국어 README](README.ko.md)
+
 A comprehensive stock screening and analysis system for NASDAQ stocks, focusing on:
 - Growth quality (revenue, EPS, and FCF growth)
 - Risk assessment (debt, margins, working capital)
