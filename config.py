@@ -156,9 +156,9 @@ class ConfigManager:
         with open(config_file, 'r') as f:
             config = json.load(f)
             
-        # Ensure required sections exist
+        # Ensure required sections exist (api_key removed as it's now from environment variables)
         required_sections = [
-            'api_key', 'base_url', 'initial_filters', 'growth_quality', 
+            'base_url', 'initial_filters', 'growth_quality', 
             'scoring', 'output', 'logging', 'concurrency'
         ]
         
