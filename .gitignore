@@ -1,51 +1,15 @@
-# Environment variables
-.env
-.env.local
-.env.*.local
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
 
-# API Keys and sensitive files
-config.json
-local_config.json
-personal_config.json
-*.key
-*.pem
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Unit test / coverage reports
+# Testing
+coverage/
 htmlcov/
 .tox/
 .nox/
 .coverage
 .coverage.*
-.cache
 nosetests.xml
 coverage.xml
 *.cover
@@ -53,34 +17,85 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Virtual environments
-.env/
-.venv/
-env/
+# Next.js
+.next/
+out/
+build/
+
+# Production
+dist/
+
+# Misc
+.DS_Store
+.DS_Store?
+._*
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables - Vercel will handle these
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
+env/
 ENV/
+.venv/
+.env/
 env.bak/
 venv.bak/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+develop-eggs/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
 
-# IDEs
+# PyInstaller
+*.manifest
+*.spec
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
 # Logs
 *.log
 logs/
+
+# Cache
+.cache/
+*.cache
 
 # Output files
 *.xlsx
@@ -89,8 +104,21 @@ output/
 reports/
 backtest_results/
 *.png
+run_metadata.json
 
 # Temporary files
 *.tmp
 *.temp
-~$* 
+~$*
+
+# OS
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# API Keys and sensitive files (now in Vercel env vars)
+config.json
+local_config.json
+personal_config.json
+*.key 

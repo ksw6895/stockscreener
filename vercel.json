@@ -1,0 +1,13 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "functions": {
+    "api/python/**/*.py": {
+      "runtime": "python3.9"
+    }
+  },
+  "env": {
+    "FMP_API_KEY": "@fmp_api_key"
+  }
+}
