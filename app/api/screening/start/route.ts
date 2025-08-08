@@ -1,58 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { spawn } from 'child_process'
-import path from 'path'
+
+// Simulated screening API for demo purposes
+// In production, this would call your Python backend or implement the logic in TypeScript
 
 export async function POST(request: NextRequest) {
   try {
     const criteria = await request.json()
     
-    // Call Python screening API
-    const pythonPath = path.join(process.cwd(), 'api', 'routes', 'screening.py')
+    // Generate a unique job ID
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     
-    const response = await new Promise((resolve, reject) => {
-      const python = spawn('python', [
-        '-c',
-        `
-import sys
-import json
-import asyncio
-sys.path.append('${path.join(process.cwd(), 'api', 'routes')}')
-from screening import start_screening
-
-async def main():
-    result = await start_screening(${JSON.stringify(criteria)})
-    print(json.dumps(result))
-
-asyncio.run(main())
-        `
-      ])
-      
-      let output = ''
-      let error = ''
-      
-      python.stdout.on('data', (data) => {
-        output += data.toString()
-      })
-      
-      python.stderr.on('data', (data) => {
-        error += data.toString()
-      })
-      
-      python.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(error || 'Python process failed'))
-        } else {
-          try {
-            resolve(JSON.parse(output))
-          } catch (e) {
-            reject(new Error('Failed to parse Python output'))
-          }
-        }
-      })
+    // In a real implementation, this would:
+    // 1. Store the job in a database
+    // 2. Trigger a background worker (e.g., using Vercel Functions, AWS Lambda, etc.)
+    // 3. Return the job ID immediately
+    
+    // For now, we'll simulate the response
+    return NextResponse.json({
+      jobId,
+      status: 'started',
+      message: 'Screening job started successfully'
     })
     
-    return NextResponse.json(response)
   } catch (error) {
+    console.error('Failed to start screening:', error)
     return NextResponse.json(
       { error: 'Failed to start screening' },
       { status: 500 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { spawn } from 'child_process'
-import path from 'path'
+
+// Simulated job status for demo purposes
+const mockJobs: { [key: string]: any } = {}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -14,46 +15,38 @@ export async function GET(request: NextRequest) {
   }
   
   try {
-    const response = await new Promise((resolve, reject) => {
-      const python = spawn('python', [
-        '-c',
-        `
-import sys
-import json
-sys.path.append('${path.join(process.cwd(), 'api', 'routes')}')
-from screening import get_job_status
-
-result = get_job_status('${jobId}')
-print(json.dumps(result))
-        `
-      ])
+    // Simulate job progress
+    // In production, this would query a database or job queue
+    
+    // Create a mock job if it doesn't exist
+    if (!mockJobs[jobId]) {
+      mockJobs[jobId] = {
+        status: 'running',
+        progress: 0,
+        startedAt: new Date().toISOString()
+      }
+    }
+    
+    // Simulate progress increment
+    if (mockJobs[jobId].status === 'running') {
+      mockJobs[jobId].progress = Math.min(100, mockJobs[jobId].progress + 20)
       
-      let output = ''
-      let error = ''
-      
-      python.stdout.on('data', (data) => {
-        output += data.toString()
-      })
-      
-      python.stderr.on('data', (data) => {
-        error += data.toString()
-      })
-      
-      python.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(error || 'Python process failed'))
-        } else {
-          try {
-            resolve(JSON.parse(output))
-          } catch (e) {
-            reject(new Error('Failed to parse Python output'))
-          }
-        }
-      })
+      if (mockJobs[jobId].progress >= 100) {
+        mockJobs[jobId].status = 'completed'
+        mockJobs[jobId].completedAt = new Date().toISOString()
+      }
+    }
+    
+    return NextResponse.json({
+      jobId,
+      status: mockJobs[jobId].status,
+      progress: mockJobs[jobId].progress,
+      startedAt: mockJobs[jobId].startedAt,
+      completedAt: mockJobs[jobId].completedAt
     })
     
-    return NextResponse.json(response)
   } catch (error) {
+    console.error('Failed to get job status:', error)
     return NextResponse.json(
       { error: 'Failed to get job status' },
       { status: 500 }
