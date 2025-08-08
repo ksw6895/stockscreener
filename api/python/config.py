@@ -1,10 +1,11 @@
-import os
 import json
 import logging
-from typing import Dict, Any, Optional
+import os
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+from config_model import PROFILE_PRESETS, StockScreenerConfig
 from dotenv import load_dotenv
-from src.config_model import StockScreenerConfig, load_config, PROFILE_PRESETS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -144,7 +145,7 @@ DEFAULT_SECTOR_BENCHMARKS = {
 
 class ConfigManager:
     """Configuration manager for the stock screening application with Pydantic validation"""
-    
+
     def __init__(self, config_file: str = DEFAULT_CONFIG_FILE):
         self.config_file = config_file
         # Load the raw config for backward compatibility
@@ -152,31 +153,31 @@ class ConfigManager:
         # Also create a validated Pydantic model
         self.pydantic_config = self._load_pydantic_config()
         self._setup_logging()
-        
+
     def load_config(self, config_file: str) -> Dict[str, Any]:
         """Load configuration from a JSON file"""
         if not os.path.exists(config_file):
             raise FileNotFoundError(f"Configuration file '{config_file}' not found.")
-        
-        with open(config_file, 'r') as f:
+
+        with open(config_file) as f:
             config = json.load(f)
-            
+
         # Ensure required sections exist (api_key removed as it's now from environment variables)
         required_sections = [
-            'base_url', 'initial_filters', 'growth_quality', 
+            'base_url', 'initial_filters', 'growth_quality',
             'scoring', 'output', 'logging', 'concurrency'
         ]
-        
+
         for section in required_sections:
             if section not in config:
                 raise ValueError(f"Missing required section '{section}' in configuration file.")
-                
+
         # Add sector benchmarks to the config if not present
         if 'sector_benchmarks' not in config:
             config['sector_benchmarks'] = DEFAULT_SECTOR_BENCHMARKS
-            
+
         return config
-    
+
     def _load_pydantic_config(self) -> StockScreenerConfig:
         """Load and validate configuration using Pydantic model"""
         try:
@@ -194,12 +195,12 @@ class ConfigManager:
         except Exception as e:
             logging.warning(f"Could not load Pydantic config: {e}. Using defaults.")
             return StockScreenerConfig()
-    
+
     def _setup_logging(self) -> None:
         """Set up logging based on configuration"""
         log_level = self.config['logging'].get('level', 'INFO').upper()
         log_file = self.config['logging'].get('file', 'stock_screener.log')
-        
+
         logging.basicConfig(
             level=getattr(logging, log_level, logging.INFO),
             format='%(asctime)s - %(levelname)s - %(message)s',
@@ -208,68 +209,68 @@ class ConfigManager:
                 logging.StreamHandler()
             ]
         )
-    
+
     def save_config(self, config_file: Optional[str] = None) -> None:
         """Save current configuration to a file"""
         if config_file is None:
             config_file = self.config_file
-            
+
         with open(config_file, 'w') as f:
             json.dump(self.config, f, indent=4)
-            
+
     def get_api_key(self) -> str:
         """Get the API key from environment variable or configuration file"""
         # First try to get from environment variable
         api_key = os.getenv('FMP_API_KEY')
-        
+
         # If not found in environment, try config file (for backward compatibility)
         if not api_key:
             api_key = self.config.get('api_key')
-        
+
         if not api_key:
             raise ValueError("API_KEY not found in environment variables or configuration file. Please set FMP_API_KEY in .env file.")
-        
+
         return api_key
-    
+
     def get_base_url(self) -> str:
         """Get the base URL for the API"""
         return self.config.get('base_url', 'https://financialmodelingprep.com/api/v3')
-    
+
     def get_base_url_v4(self) -> str:
         """Get the base URL for V4 API"""
         return self.config.get('base_url_v4', 'https://financialmodelingprep.com/api/v4')
-    
+
     def get_sector_benchmark(self, sector: str) -> Dict[str, Any]:
         """Get benchmark values for a specific sector"""
         sector_benchmarks = self.config.get('sector_benchmarks', DEFAULT_SECTOR_BENCHMARKS)
-        
+
         # Return sector-specific benchmarks or default ones if sector not found
         return sector_benchmarks.get(sector, sector_benchmarks['Default'])
-    
+
     def get_initial_filters(self) -> Dict[str, Any]:
         """Get initial filtering criteria"""
         return self.config.get('initial_filters', {})
-    
+
     def get_growth_quality_settings(self) -> Dict[str, Any]:
         """Get growth quality analysis settings"""
         return self.config.get('growth_quality', {})
-    
+
     def get_scoring_weights(self) -> Dict[str, Any]:
         """Get scoring weights"""
         return self.config.get('scoring', {}).get('weights', {})
-    
+
     def get_output_settings(self) -> Dict[str, Any]:
         """Get output settings"""
         return self.config.get('output', {})
-    
+
     def get_concurrency_settings(self) -> Dict[str, Any]:
         """Get concurrency settings"""
         return self.config.get('concurrency', {})
-    
+
     def update_config(self, new_config: Dict[str, Any]) -> None:
         """Update configuration with new values"""
         self._deep_update(self.config, new_config)
-    
+
     def _deep_update(self, d: Dict[str, Any], u: Dict[str, Any]) -> None:
         """Recursively update a dictionary with values from another dictionary"""
         for k, v in u.items():
@@ -277,11 +278,11 @@ class ConfigManager:
                 self._deep_update(d[k], v)
             else:
                 d[k] = v
-    
+
     def get_pydantic_config(self) -> StockScreenerConfig:
         """Get the validated Pydantic configuration"""
         return self.pydantic_config
-    
+
     def apply_profile(self, profile_name: str) -> None:
         """Apply a preset profile to the configuration"""
         if profile_name in PROFILE_PRESETS:
@@ -289,7 +290,7 @@ class ConfigManager:
             self.pydantic_config = self.pydantic_config.merge_with(profile_data)
             # Also update the raw config for backward compatibility
             self.update_config(profile_data)
-    
+
     def save_pydantic_config(self, config_path: Optional[Path] = None) -> None:
         """Save the Pydantic configuration to a file"""
         if config_path is None:

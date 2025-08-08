@@ -2,11 +2,12 @@
 Pydantic configuration model for type validation and settings management.
 """
 
-from typing import Dict, List, Optional, Any
+import json
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
-import json
 
 
 class AnalyzerWeights(BaseModel):
@@ -15,7 +16,7 @@ class AnalyzerWeights(BaseModel):
     risk: float = Field(default=0.3, ge=0, le=1, description="Risk analyzer weight")
     valuation: float = Field(default=0.2, ge=0, le=1, description="Valuation analyzer weight")
     sentiment: float = Field(default=0.1, ge=0, le=1, description="Sentiment analyzer weight")
-    
+
     @model_validator(mode='after')
     def validate_weights_sum(self) -> 'AnalyzerWeights':
         """Ensure weights sum to 1.0 (with small tolerance for floating point)."""
@@ -34,7 +35,7 @@ class MarketCapFilter(BaseModel):
     """Market capitalization filter configuration."""
     min_market_cap: Optional[float] = Field(default=None, ge=0, description="Minimum market cap in millions")
     max_market_cap: Optional[float] = Field(default=None, ge=0, description="Maximum market cap in millions")
-    
+
     @model_validator(mode='after')
     def validate_market_cap_range(self) -> 'MarketCapFilter':
         """Ensure min is less than max if both are specified."""
@@ -114,7 +115,7 @@ class OutputConfig(BaseModel):
     csv_filename: str = Field(default="nasdaq_analysis.csv", description="CSV output filename")
     json_filename: str = Field(default="nasdaq_analysis.json", description="JSON output filename")
     include_charts: bool = Field(default=True, description="Include charts in Excel output")
-    
+
     @field_validator('formats')
     @classmethod
     def validate_formats(cls, v: List[str]) -> List[str]:
@@ -140,7 +141,7 @@ class BacktestConfig(BaseModel):
 
 class StockScreenerConfig(BaseSettings):
     """Main configuration model for the stock screener."""
-    
+
     # Core settings
     version: str = Field(default="2.0.0", description="Configuration version")
     sectors: List[str] = Field(
@@ -151,7 +152,7 @@ class StockScreenerConfig(BaseSettings):
         ],
         description="Sectors to analyze"
     )
-    
+
     # Component configurations
     weights: AnalyzerWeights = Field(default_factory=AnalyzerWeights)
     screening: ScreeningCriteria = Field(default_factory=ScreeningCriteria)
@@ -159,36 +160,36 @@ class StockScreenerConfig(BaseSettings):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
-    
+
     # Runtime settings
     max_workers: int = Field(default=10, ge=1, le=50, description="Maximum concurrent workers")
     log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
-    
+
     class Config:
         env_prefix = "SCREENER_"
         env_nested_delimiter = "__"
         case_sensitive = False
-    
+
     @classmethod
     def from_file(cls, config_path: Path) -> 'StockScreenerConfig':
         """Load configuration from JSON file."""
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        
-        with open(config_path, 'r') as f:
+
+        with open(config_path) as f:
             config_data = json.load(f)
-        
+
         return cls(**config_data)
-    
+
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'StockScreenerConfig':
         """Create configuration from dictionary."""
         return cls(**config_dict)
-    
+
     def merge_with(self, overrides: Dict[str, Any]) -> 'StockScreenerConfig':
         """Merge current config with overrides."""
         current = self.model_dump()
-        
+
         def deep_merge(base: dict, override: dict) -> dict:
             """Recursively merge dictionaries."""
             result = base.copy()
@@ -198,14 +199,14 @@ class StockScreenerConfig(BaseSettings):
                 else:
                     result[key] = value
             return result
-        
+
         merged = deep_merge(current, overrides)
         return StockScreenerConfig(**merged)
-    
+
     def to_json(self, indent: int = 2) -> str:
         """Export configuration to JSON string."""
         return self.model_dump_json(indent=indent)
-    
+
     def save(self, config_path: Path) -> None:
         """Save configuration to JSON file."""
         with open(config_path, 'w') as f:
@@ -225,15 +226,15 @@ def load_config(config_path: Optional[Path] = None, overrides: Optional[Dict[str
     """
     # Start with defaults
     config = StockScreenerConfig()
-    
+
     # Load from file if provided
     if config_path and config_path.exists():
         config = StockScreenerConfig.from_file(config_path)
-    
+
     # Apply overrides if provided
     if overrides:
         config = config.merge_with(overrides)
-    
+
     return config
 
 

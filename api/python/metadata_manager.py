@@ -2,20 +2,19 @@
 Metadata manager for tracking run configuration and environment.
 """
 
+import hashlib
 import json
 import os
 import platform
+import subprocess
 import sys
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, Optional, List
-import subprocess
-import hashlib
+from typing import Any, Dict, List, Optional
 
 
 class MetadataManager:
     """Manages metadata for analysis runs including configuration, environment, and results."""
-    
+
     def __init__(self):
         """Initialize metadata manager."""
         self.metadata = {
@@ -29,13 +28,13 @@ class MetadataManager:
             "performance": {}
         }
         self.start_time = datetime.now()
-    
+
     def _generate_run_id(self) -> str:
         """Generate a unique run ID."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         random_suffix = hashlib.md5(os.urandom(16)).hexdigest()[:8]
         return f"run_{timestamp}_{random_suffix}"
-    
+
     def _collect_environment(self) -> Dict[str, Any]:
         """Collect environment information."""
         env_info = {
@@ -50,7 +49,7 @@ class MetadataManager:
                 "DEBUG": os.environ.get("DEBUG", "false")
             }
         }
-        
+
         # Try to get git commit hash
         try:
             git_hash = subprocess.check_output(
@@ -65,7 +64,7 @@ class MetadataManager:
                 ["git", "diff", "--quiet"],
                 stderr=subprocess.DEVNULL
             ) != 0
-            
+
             env_info["git"] = {
                 "commit": git_hash,
                 "branch": git_branch,
@@ -73,9 +72,9 @@ class MetadataManager:
             }
         except (subprocess.CalledProcessError, FileNotFoundError):
             env_info["git"] = None
-        
+
         return env_info
-    
+
     def set_configuration(self, config: Dict[str, Any]) -> None:
         """
         Set the configuration used for the run.
@@ -86,7 +85,7 @@ class MetadataManager:
         # Sanitize sensitive data
         sanitized_config = self._sanitize_config(config)
         self.metadata["configuration"] = sanitized_config
-    
+
     def set_parameters(self, **kwargs) -> None:
         """
         Set run parameters.
@@ -95,8 +94,8 @@ class MetadataManager:
             **kwargs: Parameter key-value pairs
         """
         self.metadata["parameters"].update(kwargs)
-    
-    def set_data_coverage(self, 
+
+    def set_data_coverage(self,
                          total_stocks: int,
                          filtered_stocks: int,
                          analyzed_stocks: int,
@@ -120,7 +119,7 @@ class MetadataManager:
             "date_range": date_range or {},
             "coverage_percentage": (analyzed_stocks / total_stocks * 100) if total_stocks > 0 else 0
         }
-    
+
     def set_results(self,
                    qualifying_stocks: int,
                    top_stocks: List[Dict[str, Any]],
@@ -139,7 +138,7 @@ class MetadataManager:
             "output_files": output_files,
             "success": True
         }
-    
+
     def set_performance_metrics(self,
                                api_calls: int = 0,
                                cache_hits: int = 0,
@@ -156,7 +155,7 @@ class MetadataManager:
         """
         end_time = datetime.now()
         duration = (end_time - self.start_time).total_seconds()
-        
+
         self.metadata["performance"] = {
             "duration_seconds": duration,
             "api_calls": api_calls,
@@ -167,7 +166,7 @@ class MetadataManager:
             "start_time": self.start_time.isoformat(),
             "end_time": end_time.isoformat()
         }
-    
+
     def add_timing(self, stage: str, duration: float) -> None:
         """
         Add timing information for a specific stage.
@@ -179,7 +178,7 @@ class MetadataManager:
         if "timings" not in self.metadata["performance"]:
             self.metadata["performance"]["timings"] = {}
         self.metadata["performance"]["timings"][stage] = duration
-    
+
     def add_error(self, error_type: str, error_message: str, context: Optional[Dict[str, Any]] = None) -> None:
         """
         Add error information.
@@ -191,14 +190,14 @@ class MetadataManager:
         """
         if "errors_detail" not in self.metadata:
             self.metadata["errors_detail"] = []
-        
+
         self.metadata["errors_detail"].append({
             "timestamp": datetime.now().isoformat(),
             "type": error_type,
             "message": error_message,
             "context": context or {}
         })
-    
+
     def save(self, filepath: Optional[str] = None) -> str:
         """
         Save metadata to JSON file.
@@ -211,12 +210,12 @@ class MetadataManager:
         """
         if filepath is None:
             filepath = f"run_metadata_{self.metadata['run_id']}.json"
-        
+
         with open(filepath, 'w') as f:
             json.dump(self.metadata, f, indent=2, default=str)
-        
+
         return filepath
-    
+
     def _sanitize_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Sanitize configuration to remove sensitive data.
@@ -228,10 +227,10 @@ class MetadataManager:
             Sanitized configuration
         """
         sanitized = config.copy()
-        
+
         # List of keys to sanitize
         sensitive_keys = ['api_key', 'password', 'secret', 'token', 'credential']
-        
+
         def sanitize_dict(d: Dict[str, Any]) -> Dict[str, Any]:
             result = {}
             for key, value in d.items():
@@ -242,9 +241,9 @@ class MetadataManager:
                 else:
                     result[key] = value
             return result
-        
+
         return sanitize_dict(sanitized)
-    
+
     def get_summary(self) -> Dict[str, Any]:
         """
         Get a summary of the metadata.

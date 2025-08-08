@@ -4,7 +4,7 @@ Unit tests for the Growth Analyzer.
 
 import pytest
 from datetime import datetime
-from src.analyzers.growth_analyzer import GrowthAnalyzer
+from api.python.analyzers.growth_analyzer import GrowthAnalyzer
 
 
 class TestGrowthAnalyzer:

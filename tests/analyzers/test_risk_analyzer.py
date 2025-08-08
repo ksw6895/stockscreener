@@ -3,7 +3,7 @@ Unit tests for the Risk Analyzer.
 """
 
 import pytest
-from src.analyzers.risk_analyzer import RiskAnalyzer
+from api.python.analyzers.risk_analyzer import RiskAnalyzer
 
 
 class TestRiskAnalyzer:

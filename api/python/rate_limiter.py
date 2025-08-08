@@ -1,10 +1,9 @@
 """Adaptive rate limiter that maximizes API throughput."""
 
 import asyncio
-import time
-from typing import Optional, Dict, Any
 import logging
-from datetime import datetime, timedelta
+import time
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +12,7 @@ class AdaptiveRateLimiter:
     Adaptive rate limiter that learns from API responses.
     Maximizes throughput while handling rate limit errors gracefully.
     """
-    
+
     def __init__(self, initial_rate: Optional[int] = None):
         """
         Initialize adaptive rate limiter.
@@ -27,7 +26,7 @@ class AdaptiveRateLimiter:
         self.request_times = []
         self.window_size = 60  # Track last 60 seconds
         self._lock = asyncio.Lock()
-        
+
     async def acquire(self) -> None:
         """Wait if we're in backoff period."""
         async with self._lock:
@@ -37,14 +36,14 @@ class AdaptiveRateLimiter:
                 logger.info(f"Rate limited, waiting {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)
                 self.backoff_until = None
-                
+
             # Clean old request times
             cutoff = time.time() - self.window_size
             self.request_times = [t for t in self.request_times if t > cutoff]
-            
+
             # Record this request
             self.request_times.append(time.time())
-            
+
     async def handle_response(self, status: int, headers: Dict[str, Any]) -> None:
         """
         Handle API response to adapt rate.
@@ -76,21 +75,21 @@ class AdaptiveRateLimiter:
                             wait_seconds = 10
                     else:
                         wait_seconds = 10
-                        
+
                 self.backoff_until = time.time() + wait_seconds
                 self.last_429_time = time.time()
                 logger.warning(f"Rate limited! Backing off for {wait_seconds}s")
-                
+
             elif status == 200:
                 # Success - check rate limit headers if provided
                 remaining = headers.get('X-RateLimit-Remaining', headers.get('x-ratelimit-remaining'))
                 reset_time = headers.get('X-RateLimit-Reset', headers.get('x-ratelimit-reset'))
-                
+
                 if remaining and reset_time:
                     try:
                         remaining = int(remaining)
                         reset_timestamp = int(reset_time)
-                        
+
                         if remaining < 10:  # Getting close to limit
                             seconds_until_reset = max(1, reset_timestamp - time.time())
                             # Slow down to use remaining requests over the reset period
@@ -99,12 +98,12 @@ class AdaptiveRateLimiter:
                             await asyncio.sleep(delay)
                     except:
                         pass  # Ignore parsing errors
-                        
+
     def get_stats(self) -> Dict[str, Any]:
         """Get current rate limiter statistics."""
         cutoff = time.time() - self.window_size
         recent_requests = [t for t in self.request_times if t > cutoff]
-        
+
         return {
             'requests_last_minute': len(recent_requests),
             'current_rps': len(recent_requests) / min(60, time.time() - min(recent_requests)) if recent_requests else 0,
