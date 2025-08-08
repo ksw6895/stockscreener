@@ -62,9 +62,7 @@ docs = [
 ]
 
 [project.scripts]
-stockscreener = "stock_screener:main_cli"
-stockscreener-gui = "gui:run_gui"
-stockscreener-backtest = "backtest:main"
+stockscreener = "stock_screener:main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/nasdaq-stock-screener"
@@ -73,8 +71,7 @@ Repository = "https://github.com/yourusername/nasdaq-stock-screener.git"
 Issues = "https://github.com/yourusername/nasdaq-stock-screener/issues"
 
 [tool.setuptools]
-packages = ["stockscreener", "stockscreener.src", "stockscreener.src.analyzers"]
-package-dir = {"stockscreener": "."}
+packages = ["src", "src.analyzers"]
 
 [tool.setuptools.package-data]
 stockscreener = ["*.json", "*.md", ".env.example"]
