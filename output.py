@@ -201,7 +201,12 @@ class OutputGenerator:
         for row, stock in enumerate(results, 7):
             rank = row - 6
             sheet.cell(row=row, column=1, value=rank)
-            sheet.cell(row=row, column=2, value=stock.symbol)
+            
+            # Add hyperlink to symbol for Yahoo Finance
+            symbol_cell = sheet.cell(row=row, column=2, value=stock.symbol)
+            symbol_cell.hyperlink = f"https://finance.yahoo.com/quote/{stock.symbol}"
+            symbol_cell.font = Font(color="0000FF", underline="single")
+            
             sheet.cell(row=row, column=3, value=stock.company_name)
             sheet.cell(row=row, column=4, value=stock.sector)
             sheet.cell(row=row, column=5, value=stock.market_cap)
@@ -220,6 +225,14 @@ class OutputGenerator:
                 sheet.cell(row=row, column=9).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
             elif stock.normalized_quality_score >= 0.6:
                 sheet.cell(row=row, column=9).fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        
+        # Freeze header row
+        sheet.freeze_panes = 'A7'
+        
+        # Add auto-filter to data range
+        if len(results) > 0:
+            last_row = 6 + len(results)
+            sheet.auto_filter.ref = f"A6:I{last_row}"
         
         # Create charts
         self._add_sector_distribution_chart(sheet, results)
@@ -322,6 +335,27 @@ class OutputGenerator:
                 eps_surprise = stock.earnings_info.eps_surprise_percentage
             sheet.cell(row=row, column=col, value=eps_surprise)
             sheet.cell(row=row, column=col).number_format = "0.0%"; col += 1
+        
+        # Freeze header row
+        sheet.freeze_panes = 'A2'
+        
+        # Add auto-filter to all columns
+        if len(results) > 0:
+            last_row = 1 + len(results)
+            last_col_letter = get_column_letter(len(headers))
+            sheet.auto_filter.ref = f"A1:{last_col_letter}{last_row}"
+        
+        # Apply conditional formatting to score columns
+        if len(results) > 0:
+            # Quality Score column (column 6)
+            for row in range(2, 2 + len(results)):
+                quality_score = sheet.cell(row=row, column=6).value
+                if quality_score and quality_score >= 0.8:
+                    sheet.cell(row=row, column=6).fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                elif quality_score and quality_score >= 0.6:
+                    sheet.cell(row=row, column=6).fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+                elif quality_score and quality_score < 0.4:
+                    sheet.cell(row=row, column=6).fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     
     def _write_growth_sheet(self, sheet, results: List[StockAnalysisResult]):
         """Write the growth analysis sheet"""
@@ -748,6 +782,160 @@ class OutputGenerator:
         
         # Add the chart to the sheet
         sheet.add_chart(chart, "A" + str(row_offset + 15))
+    
+    def write_csv_report(self, results: List[StockAnalysisResult], total_stocks: int) -> str:
+        """
+        Write a CSV report with screening results
+        
+        Args:
+            results: List of stock analysis results
+            total_stocks: Total number of stocks analyzed
+            
+        Returns:
+            The path to the generated file
+        """
+        import csv
+        
+        # Create the filename
+        prefix = self.output_settings.get('filename_prefix', 'nasdaq_growth_stocks')
+        filename = f"{prefix}_report_{self.timestamp}.csv"
+        
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            # Define CSV headers
+            fieldnames = [
+                'Rank', 'Symbol', 'Company Name', 'Sector', 'Industry', 'Market Cap',
+                'Quality Score', 'Growth Score', 'Risk Score', 'Valuation Score', 'Sentiment Score',
+                'P/E Ratio', 'P/B Ratio', 'FCF Yield', 'Revenue CAGR', 'EPS CAGR', 'FCF CAGR',
+                'Latest ROE', 'Debt-to-Equity', 'Interest Coverage', 'Insider Buy Count',
+                'Insider Sell Count', 'Buy/Sell Ratio', 'Latest EPS', 'EPS Surprise %'
+            ]
+            
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            # Write data rows
+            for i, stock in enumerate(results, 1):
+                row = {
+                    'Rank': i,
+                    'Symbol': stock.symbol,
+                    'Company Name': stock.company_name,
+                    'Sector': stock.sector,
+                    'Industry': stock.industry,
+                    'Market Cap': stock.market_cap,
+                    'Quality Score': round(stock.normalized_quality_score, 4),
+                    'Growth Score': round(stock.component_scores.get('growth_score', 0), 4),
+                    'Risk Score': round(stock.component_scores.get('risk_score', 0), 4),
+                    'Valuation Score': round(stock.component_scores.get('valuation_score', 0), 4),
+                    'Sentiment Score': round(stock.component_scores.get('sentiment_score', 0), 4),
+                    'P/E Ratio': round(stock.metrics.get('per', 0), 2),
+                    'P/B Ratio': round(stock.metrics.get('pbr', 0), 2),
+                    'FCF Yield': round(stock.metrics.get('fcf_yield', 0) * 100, 2),
+                    'Revenue CAGR': round(stock.metrics.get('revenue_cagr', 0) * 100, 2),
+                    'EPS CAGR': round(stock.metrics.get('eps_cagr', 0) * 100, 2),
+                    'FCF CAGR': round(stock.metrics.get('fcf_cagr', 0) * 100, 2),
+                    'Latest ROE': round(stock.metrics.get('latest_roe', 0) * 100, 2),
+                    'Debt-to-Equity': round(stock.metrics.get('debt_to_equity', 0), 2),
+                    'Interest Coverage': round(stock.metrics.get('interest_coverage', 0), 2)
+                }
+                
+                # Add insider trading info if available
+                if stock.insider_trading:
+                    row['Insider Buy Count'] = stock.insider_trading.buy_count
+                    row['Insider Sell Count'] = stock.insider_trading.sell_count
+                    row['Buy/Sell Ratio'] = round(stock.insider_trading.net_buy_sell_ratio, 2)
+                else:
+                    row['Insider Buy Count'] = 0
+                    row['Insider Sell Count'] = 0
+                    row['Buy/Sell Ratio'] = 0
+                
+                # Add earnings info if available
+                if stock.earnings_info and stock.earnings_info.latest_eps_actual is not None:
+                    row['Latest EPS'] = round(stock.earnings_info.latest_eps_actual, 2)
+                    if stock.earnings_info.eps_surprise_percentage is not None:
+                        row['EPS Surprise %'] = round(stock.earnings_info.eps_surprise_percentage * 100, 2)
+                    else:
+                        row['EPS Surprise %'] = 0
+                else:
+                    row['Latest EPS'] = 0
+                    row['EPS Surprise %'] = 0
+                
+                writer.writerow(row)
+        
+        logging.info(f"CSV report written to {filename}")
+        return filename
+    
+    def write_json_report(self, results: List[StockAnalysisResult], total_stocks: int) -> str:
+        """
+        Write a JSON report with screening results
+        
+        Args:
+            results: List of stock analysis results
+            total_stocks: Total number of stocks analyzed
+            
+        Returns:
+            The path to the generated file
+        """
+        import json
+        
+        # Create the filename
+        prefix = self.output_settings.get('filename_prefix', 'nasdaq_growth_stocks')
+        filename = f"{prefix}_report_{self.timestamp}.json"
+        
+        # Prepare data for JSON export
+        data = {
+            'metadata': {
+                'generated_at': datetime.now().isoformat(),
+                'total_stocks_screened': total_stocks,
+                'qualifying_stocks': len(results),
+                'config': {
+                    'initial_filters': self.config.get('initial_filters', {}),
+                    'roe_criteria': self.config.get('roe_criteria', {}),
+                    'growth_targets': self.config.get('growth_targets', {}),
+                    'scoring_weights': self.config.get('scoring_weights', {})
+                }
+            },
+            'results': []
+        }
+        
+        # Add stock data
+        for i, stock in enumerate(results, 1):
+            stock_data = {
+                'rank': i,
+                'symbol': stock.symbol,
+                'company_name': stock.company_name,
+                'sector': stock.sector,
+                'industry': stock.industry,
+                'market_cap': stock.market_cap,
+                'scores': {
+                    'quality_score': stock.normalized_quality_score,
+                    'growth_score': stock.component_scores.get('growth_score', 0),
+                    'risk_score': stock.component_scores.get('risk_score', 0),
+                    'valuation_score': stock.component_scores.get('valuation_score', 0),
+                    'sentiment_score': stock.component_scores.get('sentiment_score', 0),
+                    'coherence_multiplier': stock.component_scores.get('coherence_multiplier', 1.0)
+                },
+                'metrics': stock.metrics,
+                'financial_metrics': stock.financial_metrics.__dict__ if stock.financial_metrics else {},
+                'insider_trading': {
+                    'buy_count': stock.insider_trading.buy_count if stock.insider_trading else 0,
+                    'sell_count': stock.insider_trading.sell_count if stock.insider_trading else 0,
+                    'net_buy_sell_ratio': stock.insider_trading.net_buy_sell_ratio if stock.insider_trading else 0
+                },
+                'earnings': {
+                    'latest_eps_actual': stock.earnings_info.latest_eps_actual if stock.earnings_info else None,
+                    'latest_eps_estimated': stock.earnings_info.latest_eps_estimated if stock.earnings_info else None,
+                    'eps_surprise_percentage': stock.earnings_info.eps_surprise_percentage if stock.earnings_info else None,
+                    'next_earnings_date': stock.earnings_info.next_earnings_date if stock.earnings_info else None
+                }
+            }
+            data['results'].append(stock_data)
+        
+        # Write JSON file
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, default=str)
+        
+        logging.info(f"JSON report written to {filename}")
+        return filename
 
 
 # Create the global output generator instance

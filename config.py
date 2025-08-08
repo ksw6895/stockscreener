@@ -2,7 +2,9 @@ import os
 import json
 import logging
 from typing import Dict, Any, Optional
+from pathlib import Path
 from dotenv import load_dotenv
+from src.config_model import StockScreenerConfig, load_config, PROFILE_PRESETS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -141,11 +143,14 @@ DEFAULT_SECTOR_BENCHMARKS = {
 
 
 class ConfigManager:
-    """Configuration manager for the stock screening application"""
+    """Configuration manager for the stock screening application with Pydantic validation"""
     
     def __init__(self, config_file: str = DEFAULT_CONFIG_FILE):
         self.config_file = config_file
+        # Load the raw config for backward compatibility
         self.config = self.load_config(config_file)
+        # Also create a validated Pydantic model
+        self.pydantic_config = self._load_pydantic_config()
         self._setup_logging()
         
     def load_config(self, config_file: str) -> Dict[str, Any]:
@@ -171,6 +176,24 @@ class ConfigManager:
             config['sector_benchmarks'] = DEFAULT_SECTOR_BENCHMARKS
             
         return config
+    
+    def _load_pydantic_config(self) -> StockScreenerConfig:
+        """Load and validate configuration using Pydantic model"""
+        try:
+            # Try to map the old config format to the new Pydantic model
+            config_path = Path(self.config_file)
+            if config_path.exists():
+                # Attempt to load with new model, falling back to defaults if needed
+                try:
+                    return StockScreenerConfig.from_file(config_path)
+                except Exception:
+                    # Create from defaults if old format doesn't match
+                    return StockScreenerConfig()
+            else:
+                return StockScreenerConfig()
+        except Exception as e:
+            logging.warning(f"Could not load Pydantic config: {e}. Using defaults.")
+            return StockScreenerConfig()
     
     def _setup_logging(self) -> None:
         """Set up logging based on configuration"""
@@ -254,6 +277,24 @@ class ConfigManager:
                 self._deep_update(d[k], v)
             else:
                 d[k] = v
+    
+    def get_pydantic_config(self) -> StockScreenerConfig:
+        """Get the validated Pydantic configuration"""
+        return self.pydantic_config
+    
+    def apply_profile(self, profile_name: str) -> None:
+        """Apply a preset profile to the configuration"""
+        if profile_name in PROFILE_PRESETS:
+            profile_data = PROFILE_PRESETS[profile_name]
+            self.pydantic_config = self.pydantic_config.merge_with(profile_data)
+            # Also update the raw config for backward compatibility
+            self.update_config(profile_data)
+    
+    def save_pydantic_config(self, config_path: Optional[Path] = None) -> None:
+        """Save the Pydantic configuration to a file"""
+        if config_path is None:
+            config_path = Path(self.config_file)
+        self.pydantic_config.save(config_path)
 
 
 # Global configuration instance

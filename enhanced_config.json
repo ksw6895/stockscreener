@@ -2,8 +2,8 @@
     "base_url": "https://financialmodelingprep.com/api/v3",
     "base_url_v4": "https://financialmodelingprep.com/api/v4",
     "initial_filters": {
-        "market_cap_min": 100000000000,
-        "market_cap_max": 200000000000,
+        "market_cap_min": 1000000000,
+        "market_cap_max": 50000000000,
         "exclude_financial_sector": false,
         "roe": {
             "min_avg": 0.15,
@@ -13,16 +13,16 @@
     },
     "growth_quality": {
         "revenue_growth": {
-            "min_cagr": 0.2,
+            "min_cagr": 0.1,
             "magnitude_weight": 0.35,
             "consistency_weight": 0.35,
             "sustainability_weight": 0.3
         },
         "eps_growth": {
-            "min_cagr": 0.15
+            "min_cagr": 0.1
         },
         "fcf_growth": {
-            "min_cagr": 0.15
+            "min_cagr": 0.08
         }
     },
     "risk_quality": {
@@ -38,7 +38,7 @@
     "valuation": {
         "per_max": 30.0,
         "pbr_max": 5.0,
-        "fcf_yield_min": 3e-18,
+        "fcf_yield_min": 3e-22,
         "weights": {
             "per": 0.3,
             "pbr": 0.2,
@@ -54,9 +54,9 @@
         }
     },
     "target_rates": {
-        "revenue": 0.2,
-        "eps": 0.15,
-        "fcf": 0.15
+        "revenue": 0.1,
+        "eps": 0.1,
+        "fcf": 0.08
     },
     "scoring": {
         "normalization": {
@@ -64,9 +64,9 @@
         },
         "weights": {
             "growth_quality": 0.4,
-            "risk_quality": 0.25,
+            "risk_quality": 0.3,
             "valuation": 0.2,
-            "sentiment": 0.15
+            "sentiment": 0.1
         },
         "coherence_bonus": {
             "max_multiplier": 1.15,

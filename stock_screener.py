@@ -3,6 +3,7 @@ import sys
 import asyncio
 import logging
 import time
+import argparse
 from typing import Dict, List, Any, Optional, Tuple
 import statistics
 import aiohttp
@@ -13,6 +14,7 @@ from api_client import api_client
 from data_processing import prepare_financial_metrics, prepare_insider_trading_info, prepare_earnings_info, prepare_sentiment_info
 from quality_scorer import QualityScorer
 from output import output_generator
+from src.metadata_manager import create_metadata_manager
 
 
 async def screen_stocks():
@@ -31,8 +33,12 @@ async def screen_stocks():
     """
     start_time = time.time()
     
+    # Create metadata manager
+    metadata_manager = create_metadata_manager()
+    
     # Get configuration
     initial_filters = config_manager.get_initial_filters()
+    metadata_manager.set_configuration(config_manager.config)
     
     # Create quality scorer
     quality_scorer = QualityScorer()
@@ -72,6 +78,16 @@ async def screen_stocks():
             profile = symbol_profile_map.get(symbol)
             
             if not profile:
+                continue
+            
+            # Skip mutual funds and ETFs (typically have 5-letter symbols ending in X)
+            # Also skip if no exchange info or if it's MUTUAL_FUND
+            exchange_type = profile.get('exchangeShortName', '')
+            if len(symbol) == 5 and symbol[-1] == 'X':
+                logging.debug(f"Skipping {symbol}: Likely mutual fund")
+                continue
+            if 'MUTUAL' in exchange_type.upper() or 'FUND' in exchange_type.upper():
+                logging.debug(f"Skipping {symbol}: Mutual fund or ETF")
                 continue
                 
             market_cap = profile.get('mktCap')
@@ -221,6 +237,30 @@ async def screen_stocks():
     execution_time = end_time - start_time
     logging.info(f"Screening complete. Total execution time: {execution_time:.2f} seconds")
     
+    # Update metadata with final results
+    if all_results:
+        top_stocks = [
+            {
+                "symbol": stock.symbol,
+                "company": stock.company_name,
+                "score": stock.normalized_quality_score,
+                "sector": stock.sector
+            }
+            for stock in all_results[:10]  # Top 10 stocks
+        ]
+        metadata_manager.set_results(
+            qualifying_stocks=len(all_results),
+            top_stocks=top_stocks,
+            output_files=[]  # Will be updated by output generator
+        )
+    
+    # Set performance metrics
+    metadata_manager.set_performance_metrics()
+    
+    # Save metadata
+    metadata_file = metadata_manager.save("run_metadata.json")
+    logging.info(f"Run metadata saved to {metadata_file}")
+    
     return all_results, total_stocks
 
 
@@ -270,5 +310,150 @@ def run_screener():
     asyncio.run(main())
 
 
-if __name__ == "__main__":
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Enhanced NASDAQ Stock Screener')
+    
+    # Config and logging
+    parser.add_argument('--config', type=str, help='Path to config file')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
+                       default='INFO', help='Logging level')
+    parser.add_argument('--clear-cache', action='store_true', help='Clear cached data before running')
+    
+    # Preset profiles
+    parser.add_argument('--profile', choices=['quality', 'growth', 'value', 'balanced'],
+                       help='Use a preset profile')
+    
+    # Market cap filters
+    parser.add_argument('--market-cap-min', type=float, help='Minimum market cap in millions')
+    parser.add_argument('--market-cap-max', type=float, help='Maximum market cap in millions')
+    
+    # ROE filters
+    parser.add_argument('--roe-min', type=float, help='Minimum average ROE percentage')
+    parser.add_argument('--roe-min-each-year', type=float, help='Minimum ROE each year percentage')
+    
+    # Growth filters
+    parser.add_argument('--revenue-growth-min', type=float, help='Minimum revenue CAGR percentage')
+    parser.add_argument('--eps-growth-min', type=float, help='Minimum EPS CAGR percentage')
+    parser.add_argument('--fcf-growth-min', type=float, help='Minimum FCF CAGR percentage')
+    
+    # Scoring weights
+    parser.add_argument('--growth-weight', type=float, help='Growth scoring weight (0-1)')
+    parser.add_argument('--risk-weight', type=float, help='Risk scoring weight (0-1)')
+    parser.add_argument('--valuation-weight', type=float, help='Valuation scoring weight (0-1)')
+    parser.add_argument('--sentiment-weight', type=float, help='Sentiment scoring weight (0-1)')
+    
+    # Output options
+    parser.add_argument('--output-dir', type=str, help='Output directory for results')
+    parser.add_argument('--top-n', type=int, default=10, help='Number of top stocks to display')
+    
+    return parser.parse_args()
+
+
+def apply_cli_overrides(args):
+    """Apply CLI argument overrides to config"""
+    
+    # Apply preset profile if specified
+    if args.profile:
+        presets = {
+            'quality': {
+                'initial_filters': {'market_cap_min': 1000000000, 'market_cap_max': 50000000000},
+                'roe_criteria': {'avg_min': 0.15, 'min_each_year': 0.10},
+                'growth_targets': {'revenue_min_cagr': 0.10, 'eps_min_cagr': 0.10, 'fcf_min_cagr': 0.08},
+                'scoring_weights': {'growth': 0.4, 'risk': 0.3, 'valuation': 0.2, 'sentiment': 0.1}
+            },
+            'growth': {
+                'initial_filters': {'market_cap_min': 500000000, 'market_cap_max': 20000000000},
+                'roe_criteria': {'avg_min': 0.10, 'min_each_year': 0.05},
+                'growth_targets': {'revenue_min_cagr': 0.20, 'eps_min_cagr': 0.15, 'fcf_min_cagr': 0.12},
+                'scoring_weights': {'growth': 0.6, 'risk': 0.2, 'valuation': 0.1, 'sentiment': 0.1}
+            },
+            'value': {
+                'initial_filters': {'market_cap_min': 2000000000, 'market_cap_max': 100000000000},
+                'roe_criteria': {'avg_min': 0.10, 'min_each_year': 0.08},
+                'growth_targets': {'revenue_min_cagr': 0.05, 'eps_min_cagr': 0.05, 'fcf_min_cagr': 0.05},
+                'scoring_weights': {'growth': 0.2, 'risk': 0.3, 'valuation': 0.4, 'sentiment': 0.1}
+            },
+            'balanced': {
+                'initial_filters': {'market_cap_min': 1000000000, 'market_cap_max': 50000000000},
+                'roe_criteria': {'avg_min': 0.12, 'min_each_year': 0.08},
+                'growth_targets': {'revenue_min_cagr': 0.10, 'eps_min_cagr': 0.10, 'fcf_min_cagr': 0.08},
+                'scoring_weights': {'growth': 0.25, 'risk': 0.25, 'valuation': 0.25, 'sentiment': 0.25}
+            }
+        }
+        
+        if args.profile in presets:
+            for section, values in presets[args.profile].items():
+                config_manager.config[section].update(values)
+    
+    # Apply individual overrides
+    if args.market_cap_min:
+        config_manager.config['initial_filters']['market_cap_min'] = args.market_cap_min * 1000000
+    if args.market_cap_max:
+        config_manager.config['initial_filters']['market_cap_max'] = args.market_cap_max * 1000000
+    
+    if args.roe_min:
+        config_manager.config['roe_criteria']['avg_min'] = args.roe_min / 100
+    if args.roe_min_each_year:
+        config_manager.config['roe_criteria']['min_each_year'] = args.roe_min_each_year / 100
+    
+    if args.revenue_growth_min:
+        config_manager.config['growth_targets']['revenue_min_cagr'] = args.revenue_growth_min / 100
+    if args.eps_growth_min:
+        config_manager.config['growth_targets']['eps_min_cagr'] = args.eps_growth_min / 100
+    if args.fcf_growth_min:
+        config_manager.config['growth_targets']['fcf_min_cagr'] = args.fcf_growth_min / 100
+    
+    # Normalize weights if provided
+    weights = {}
+    if args.growth_weight is not None:
+        weights['growth'] = args.growth_weight
+    if args.risk_weight is not None:
+        weights['risk'] = args.risk_weight
+    if args.valuation_weight is not None:
+        weights['valuation'] = args.valuation_weight
+    if args.sentiment_weight is not None:
+        weights['sentiment'] = args.sentiment_weight
+    
+    if weights:
+        total = sum(weights.values())
+        if total > 0:
+            normalized = {k: v/total for k, v in weights.items()}
+            config_manager.config['scoring_weights'].update(normalized)
+    
+    if args.output_dir:
+        config_manager.config['output']['directory'] = args.output_dir
+    if args.top_n:
+        config_manager.config['output']['top_n'] = args.top_n
+
+
+def main_cli():
+    """Entry point for console script"""
+    args = parse_arguments()
+    
+    # Set up logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    
+    # Clear cache if requested
+    if args.clear_cache:
+        from src.cache import cache_manager
+        cache_manager.clear()
+        logging.info("Cache cleared successfully")
+    
+    # Load config file if specified
+    if args.config:
+        config_manager.config_file = args.config
+        config_manager.config = config_manager.load_config(args.config)
+    
+    # Apply CLI overrides
+    apply_cli_overrides(args)
+    
+    # Run screener
     run_screener()
+
+
+if __name__ == "__main__":
+    main_cli()

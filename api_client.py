@@ -2,11 +2,15 @@ import asyncio
 import logging
 import time
 from typing import Dict, List, Any, Optional, Union, Tuple
+from datetime import datetime, timedelta
+import os
 
 import aiohttp
 from aiohttp import ClientSession
 
 from config import config_manager, REQUEST_DELAY, MAX_CONCURRENT_REQUESTS, MAX_RETRIES
+from src.rate_limiter import adaptive_limiter
+from src.cache import cache_manager
 
 
 class APIClient:
@@ -18,51 +22,66 @@ class APIClient:
         self.base_url_v4 = config_manager.get_base_url_v4()
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         
-    async def fetch(self, session: ClientSession, url: str) -> Optional[Any]:
+        # Clear stale cache on startup if needed
+        if os.environ.get('CLEAR_CACHE_ON_START', 'false').lower() == 'true':
+            cache_manager.clear()
+            logging.info("Cleared cache on startup")
+        
+    async def fetch(self, session: ClientSession, url: str, use_cache: bool = True, cache_ttl: Optional[int] = None) -> Optional[Any]:
         """
-        Fetch data from a URL with retry logic and rate limiting
+        Fetch data from a URL with caching and adaptive rate limiting
         
         Args:
             session: The aiohttp ClientSession
             url: The URL to fetch
+            use_cache: Whether to use caching
             
         Returns:
             The JSON response data, or None if the request failed
         """
-        wait_time = REQUEST_DELAY
+        # Check cache first
+        if use_cache:
+            cached_data = await cache_manager.get(url)
+            if cached_data is not None:
+                return cached_data
+        
         retries = 0
         
         while retries < MAX_RETRIES:
             try:
                 async with self.semaphore:
-                    # Add delay for rate limiting
-                    await asyncio.sleep(REQUEST_DELAY)
+                    # Use adaptive rate limiter
+                    await adaptive_limiter.acquire()
                     
                     async with session.get(url, timeout=15) as response:
+                        # Let rate limiter learn from response
+                        await adaptive_limiter.handle_response(
+                            response.status, 
+                            dict(response.headers)
+                        )
+                        
                         if response.status == 200:
-                            return await response.json()
+                            data = await response.json()
+                            # Cache successful response
+                            if use_cache:
+                                await cache_manager.set(url, data, cache_ttl)
+                            return data
                         elif response.status == 429:  # Rate limit exceeded
-                            logging.warning(f"Rate limit exceeded. Waiting {wait_time}s before retrying: {url}")
-                            await asyncio.sleep(wait_time)
-                            wait_time = min(wait_time * 2, 60)  # Exponential backoff
+                            # Adaptive limiter will handle backoff
+                            logging.warning(f"Rate limit exceeded, retrying: {url}")
                             retries += 1
                         elif response.status == 404:  # Not found
                             logging.error(f"Resource not found (404): {url}")
                             return None
                         else:
                             logging.error(f"HTTP error {response.status}: {url}")
-                            await asyncio.sleep(wait_time)
-                            wait_time = min(wait_time * 2, 60)
                             retries += 1
+                            
             except asyncio.TimeoutError:
-                logging.warning(f"Request timeout. Waiting {wait_time}s before retrying: {url}")
-                await asyncio.sleep(wait_time)
-                wait_time = min(wait_time * 2, 60)
+                logging.warning(f"Request timeout, retrying: {url}")
                 retries += 1
             except Exception as e:
                 logging.error(f"Error fetching {url}: {str(e)}")
-                await asyncio.sleep(wait_time)
-                wait_time = min(wait_time * 2, 60)
                 retries += 1
                 
         logging.error(f"Failed to fetch {url} after {MAX_RETRIES} retries")
@@ -239,19 +258,32 @@ class APIClient:
         url = f"{self.base_url_v4}/insider-trading?symbol={symbol}&page=0&limit={limit}&apikey={self.api_key}"
         return await self.fetch(session, url) or []
     
-    async def get_earnings_calendar(self, session: ClientSession, symbol: str) -> List[Dict[str, Any]]:
+    async def get_earnings_calendar(self, session: ClientSession, symbol: str, 
+                                   from_date: Optional[str] = None, 
+                                   to_date: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get earnings calendar data for a company
         
         Args:
             session: The aiohttp ClientSession
             symbol: The stock symbol
+            from_date: Start date (YYYY-MM-DD format)
+            to_date: End date (YYYY-MM-DD format)
             
         Returns:
             A list of earnings calendar dictionaries
         """
-        # Get earnings from last 90 days
-        url = f"{self.base_url_v3}/earnings-calendar?symbol={symbol}&from=2024-01-01&apikey={self.api_key}"
+        # Default to last 2 years if not specified
+        if not from_date:
+            from datetime import datetime, timedelta
+            from_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+        
+        # Build URL with optional to_date
+        url = f"{self.base_url_v3}/earnings-calendar?symbol={symbol}&from={from_date}"
+        if to_date:
+            url += f"&to={to_date}"
+        url += f"&apikey={self.api_key}"
+        
         return await self.fetch(session, url) or []
     
     async def get_social_sentiment(self, session: ClientSession, symbol: str) -> Dict[str, Any]:
@@ -278,19 +310,25 @@ class APIClient:
             'bearish': bearish_data[0] if bearish_data and len(bearish_data) > 0 else None
         }
     
-    async def get_historical_price(self, session: ClientSession, symbol: str, limit: int = 1) -> List[Dict[str, Any]]:
+    async def get_historical_price(self, session: ClientSession, symbol: str, limit: int = 1, 
+                                  start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get recent historical price data for a company
         
         Args:
             session: The aiohttp ClientSession
             symbol: The stock symbol
-            limit: Maximum number of data points to retrieve
+            limit: Maximum number of data points to retrieve (ignored if dates provided)
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
             
         Returns:
             A list of historical price dictionaries
         """
-        url = f"{self.base_url_v3}/historical-price-full/{symbol}?timeseries={limit}&apikey={self.api_key}"
+        if start_date and end_date:
+            url = f"{self.base_url_v3}/historical-price-full/{symbol}?from={start_date}&to={end_date}&apikey={self.api_key}"
+        else:
+            url = f"{self.base_url_v3}/historical-price-full/{symbol}?timeseries={limit}&apikey={self.api_key}"
         result = await self.fetch(session, url)
         return result.get('historical', []) if result else []
     

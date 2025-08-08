@@ -2,14 +2,17 @@ import os
 import sys
 import logging
 import tkinter as tk
-from tkinter import ttk, messagebox, StringVar, BooleanVar, IntVar, DoubleVar
+from tkinter import ttk, messagebox, StringVar, BooleanVar, IntVar, DoubleVar, filedialog
 from tkinter.scrolledtext import ScrolledText
 import threading
 import asyncio
 import queue
 import subprocess
+import json
+from pathlib import Path
 
 from config import config_manager
+from src.gui_helpers import ValidatedEntry, PercentageEntry, WeightEntry, add_tooltip, create_labeled_entry
 
 
 class GUIApp:
@@ -26,7 +29,7 @@ class GUIApp:
         """
         self.root = root
         self.root.title("Enhanced NASDAQ Stock Screener")
-        self.root.geometry("800x600")
+        self.root.geometry("1200x800")
         
         # Create variables to store configuration values
         self.config_vars = {}
@@ -70,8 +73,20 @@ class GUIApp:
         
         # Create buttons
         ttk.Button(self.control_frame, text="Start Screening", command=self._start_screening).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(self.control_frame, text="Clear Cache", command=self._clear_cache).pack(side=tk.RIGHT, padx=5)
         ttk.Button(self.control_frame, text="Save Settings", command=self._save_settings).pack(side=tk.RIGHT, padx=5)
         ttk.Button(self.control_frame, text="Load Settings", command=self._load_settings).pack(side=tk.RIGHT, padx=5)
+        
+        # Add custom profile buttons
+        ttk.Button(self.control_frame, text="Save Profile", command=self._save_custom_profile).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(self.control_frame, text="Load Profile", command=self._load_custom_profile).pack(side=tk.RIGHT, padx=5)
+        
+        # Add preset buttons
+        ttk.Label(self.control_frame, text="Presets:").pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.control_frame, text="Quality", command=lambda: self._apply_preset("quality")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(self.control_frame, text="Growth", command=lambda: self._apply_preset("growth")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(self.control_frame, text="Value", command=lambda: self._apply_preset("value")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(self.control_frame, text="Balanced", command=lambda: self._apply_preset("balanced")).pack(side=tk.LEFT, padx=2)
         
         # Load initial values from config
         self._load_config_values()
@@ -80,49 +95,56 @@ class GUIApp:
         self.root.after(100, self._check_log_queue)
     
     def _init_filters_tab(self):
-        """Initialize the initial filters tab"""
+        """Initialize the initial filters tab with validation and tooltips"""
         frame = ttk.LabelFrame(self.filters_tab, text="Market Cap and Sector Filters")
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Market cap filters
-        ttk.Label(frame, text="Market Cap Min ($M):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        # Market cap filters with validation
         self.config_vars['market_cap_min'] = DoubleVar()
-        ttk.Entry(frame, textvariable=self.config_vars['market_cap_min']).grid(row=0, column=1, padx=5, pady=5)
+        create_labeled_entry(frame, "Market Cap Min ($M):", self.config_vars['market_cap_min'],
+                           row=0, tooltip="Minimum market capitalization in millions (e.g., 1000 for $1B)",
+                           min_val=0, max_val=1000000)
         
-        ttk.Label(frame, text="Market Cap Max ($M):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['market_cap_max'] = DoubleVar()
-        ttk.Entry(frame, textvariable=self.config_vars['market_cap_max']).grid(row=1, column=1, padx=5, pady=5)
+        create_labeled_entry(frame, "Market Cap Max ($M):", self.config_vars['market_cap_max'],
+                           row=1, tooltip="Maximum market capitalization in millions (leave 0 for no limit)",
+                           min_val=0, max_val=10000000)
         
-        # Sector exclusion
+        # Sector exclusion with tooltip
         self.config_vars['exclude_financial_sector'] = BooleanVar()
-        ttk.Checkbutton(frame, text="Exclude Financial Sector", 
-                       variable=self.config_vars['exclude_financial_sector']).grid(
-                       row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        cb = ttk.Checkbutton(frame, text="Exclude Financial Sector", 
+                           variable=self.config_vars['exclude_financial_sector'])
+        cb.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        add_tooltip(cb, "Exclude financial sector stocks from analysis (banks, insurance, etc.)")
         
-        # ROE criteria
+        # ROE criteria with validation
         roe_frame = ttk.LabelFrame(self.filters_tab, text="ROE Criteria")
         roe_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(roe_frame, text="Min Average ROE (%):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['roe_avg_min'] = DoubleVar()
-        ttk.Entry(roe_frame, textvariable=self.config_vars['roe_avg_min']).grid(row=0, column=1, padx=5, pady=5)
+        create_labeled_entry(roe_frame, "Min Average ROE (%):", self.config_vars['roe_avg_min'],
+                           row=0, entry_type="percentage",
+                           tooltip="Minimum average Return on Equity over specified years (10-30% typical)")
         
-        ttk.Label(roe_frame, text="Min ROE Each Year (%):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['roe_min_each_year'] = DoubleVar()
-        ttk.Entry(roe_frame, textvariable=self.config_vars['roe_min_each_year']).grid(row=1, column=1, padx=5, pady=5)
+        create_labeled_entry(roe_frame, "Min ROE Each Year (%):", self.config_vars['roe_min_each_year'],
+                           row=1, entry_type="percentage",
+                           tooltip="Minimum ROE required for each individual year (consistency check)")
         
-        ttk.Label(roe_frame, text="Number of Years:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['roe_years'] = IntVar()
-        ttk.Entry(roe_frame, textvariable=self.config_vars['roe_years']).grid(row=2, column=1, padx=5, pady=5)
+        create_labeled_entry(roe_frame, "Number of Years:", self.config_vars['roe_years'],
+                           row=2, dtype=int, min_val=1, max_val=10,
+                           tooltip="Number of years to analyze for ROE consistency (typically 3-5 years)")
     
     def _init_growth_tab(self):
-        """Initialize the growth settings tab"""
+        """Initialize the growth settings tab with validation"""
         frame = ttk.LabelFrame(self.growth_tab, text="Growth Rate Targets")
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(frame, text="Min Revenue CAGR (%):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['revenue_growth_min_cagr'] = DoubleVar()
-        ttk.Entry(frame, textvariable=self.config_vars['revenue_growth_min_cagr']).grid(row=0, column=1, padx=5, pady=5)
+        create_labeled_entry(frame, "Min Revenue CAGR (%):", self.config_vars['revenue_growth_min_cagr'],
+                           row=0, entry_type="percentage",
+                           tooltip="Minimum revenue compound annual growth rate (5-20% typical for quality companies)")
         
         ttk.Label(frame, text="Min EPS CAGR (%):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['eps_growth_min_cagr'] = DoubleVar()
@@ -254,19 +276,31 @@ class GUIApp:
         
         ttk.Label(weight_frame, text="Growth Quality Weight:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['growth_quality_weight'] = DoubleVar()
+        self.config_vars['growth_quality_weight'].trace_add('write', lambda *args: self._update_weight_sum())
         ttk.Entry(weight_frame, textvariable=self.config_vars['growth_quality_weight']).grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Label(weight_frame, text="Risk Quality Weight:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['risk_quality_weight'] = DoubleVar()
+        self.config_vars['risk_quality_weight'].trace_add('write', lambda *args: self._update_weight_sum())
         ttk.Entry(weight_frame, textvariable=self.config_vars['risk_quality_weight']).grid(row=1, column=1, padx=5, pady=5)
         
         ttk.Label(weight_frame, text="Valuation Weight:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['valuation_weight'] = DoubleVar()
+        self.config_vars['valuation_weight'].trace_add('write', lambda *args: self._update_weight_sum())
         ttk.Entry(weight_frame, textvariable=self.config_vars['valuation_weight']).grid(row=2, column=1, padx=5, pady=5)
         
         ttk.Label(weight_frame, text="Sentiment Weight:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
         self.config_vars['sentiment_weight'] = DoubleVar()
+        self.config_vars['sentiment_weight'].trace_add('write', lambda *args: self._update_weight_sum())
         ttk.Entry(weight_frame, textvariable=self.config_vars['sentiment_weight']).grid(row=3, column=1, padx=5, pady=5)
+        
+        # Weight sum display and normalize button
+        ttk.Label(weight_frame, text="Current Sum:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        self.weight_sum_label = ttk.Label(weight_frame, text="0.00", font=('TkDefaultFont', 10, 'bold'))
+        self.weight_sum_label.grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        ttk.Button(weight_frame, text="Normalize Weights", command=self._normalize_weights).grid(
+            row=5, column=0, columnspan=2, padx=5, pady=10)
     
     def _init_log_tab(self):
         """Initialize the log tab"""
@@ -479,6 +513,140 @@ class GUIApp:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load settings: {str(e)}")
     
+    def _update_weight_sum(self):
+        """Update the weight sum display"""
+        try:
+            growth_weight = self.config_vars['growth_quality_weight'].get() or 0
+            risk_weight = self.config_vars['risk_quality_weight'].get() or 0
+            valuation_weight = self.config_vars['valuation_weight'].get() or 0
+            sentiment_weight = self.config_vars['sentiment_weight'].get() or 0
+            
+            total = growth_weight + risk_weight + valuation_weight + sentiment_weight
+            
+            # Update label with color coding
+            self.weight_sum_label.config(text=f"{total:.2f}")
+            if abs(total - 1.0) < 0.001:
+                self.weight_sum_label.config(foreground="green")
+            else:
+                self.weight_sum_label.config(foreground="red")
+        except:
+            pass  # Ignore errors during initialization
+    
+    def _normalize_weights(self):
+        """Normalize weights to sum to 1.0"""
+        try:
+            growth_weight = self.config_vars['growth_quality_weight'].get() or 0
+            risk_weight = self.config_vars['risk_quality_weight'].get() or 0
+            valuation_weight = self.config_vars['valuation_weight'].get() or 0
+            sentiment_weight = self.config_vars['sentiment_weight'].get() or 0
+            
+            total = growth_weight + risk_weight + valuation_weight + sentiment_weight
+            
+            if total > 0:
+                self.config_vars['growth_quality_weight'].set(round(growth_weight / total, 3))
+                self.config_vars['risk_quality_weight'].set(round(risk_weight / total, 3))
+                self.config_vars['valuation_weight'].set(round(valuation_weight / total, 3))
+                self.config_vars['sentiment_weight'].set(round(sentiment_weight / total, 3))
+                
+                messagebox.showinfo("Weights Normalized", "Weights have been normalized to sum to 1.0")
+            else:
+                messagebox.showwarning("Invalid Weights", "Cannot normalize weights when sum is zero")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to normalize weights: {str(e)}")
+    
+    def _apply_preset(self, preset_name):
+        """Apply a preset configuration"""
+        presets = {
+            "quality": {
+                "market_cap_min": 1000.0,
+                "market_cap_max": 50000.0,
+                "roe_avg_min": 15.0,
+                "roe_min_each_year": 10.0,
+                "revenue_growth_min_cagr": 10.0,
+                "eps_growth_min_cagr": 10.0,
+                "fcf_growth_min_cagr": 8.0,
+                "growth_quality_weight": 0.4,  # Fixed key name
+                "risk_quality_weight": 0.3,    # Fixed key name
+                "valuation_weight": 0.2,
+                "sentiment_weight": 0.1
+            },
+            "growth": {
+                "market_cap_min": 500.0,
+                "market_cap_max": 20000.0,
+                "roe_avg_min": 10.0,
+                "roe_min_each_year": 5.0,
+                "revenue_growth_min_cagr": 20.0,
+                "eps_growth_min_cagr": 15.0,
+                "fcf_growth_min_cagr": 12.0,
+                "growth_quality_weight": 0.6,  # Fixed key name
+                "risk_quality_weight": 0.2,    # Fixed key name
+                "valuation_weight": 0.1,
+                "sentiment_weight": 0.1
+            },
+            "value": {
+                "market_cap_min": 2000.0,
+                "market_cap_max": 100000.0,
+                "roe_avg_min": 10.0,
+                "roe_min_each_year": 8.0,
+                "revenue_growth_min_cagr": 5.0,
+                "eps_growth_min_cagr": 5.0,
+                "fcf_growth_min_cagr": 5.0,
+                "growth_quality_weight": 0.2,  # Fixed key name
+                "risk_quality_weight": 0.3,    # Fixed key name
+                "valuation_weight": 0.4,
+                "sentiment_weight": 0.1
+            },
+            "balanced": {
+                "market_cap_min": 1000.0,
+                "market_cap_max": 50000.0,
+                "roe_avg_min": 12.0,
+                "roe_min_each_year": 8.0,
+                "revenue_growth_min_cagr": 10.0,
+                "eps_growth_min_cagr": 10.0,
+                "fcf_growth_min_cagr": 8.0,
+                "growth_quality_weight": 0.25,  # Fixed key name
+                "risk_quality_weight": 0.25,    # Fixed key name
+                "valuation_weight": 0.25,
+                "sentiment_weight": 0.25
+            }
+        }
+        
+        if preset_name in presets:
+            preset = presets[preset_name]
+            
+            # Apply all preset values
+            for key, value in preset.items():
+                if key in self.config_vars:
+                    self.config_vars[key].set(value)
+                else:
+                    # Log warning for debugging
+                    logging.debug(f"Key '{key}' not found in config_vars")
+            
+            # Update weight sum display if it exists
+            if hasattr(self, '_update_weight_sum'):
+                self._update_weight_sum()
+            
+            messagebox.showinfo("Preset Applied", f"{preset_name.capitalize()} preset applied with normalized weights.")
+        else:
+            messagebox.showerror("Error", f"Unknown preset: {preset_name}")
+    
+    def _clear_cache(self):
+        """Clear the cache"""
+        try:
+            from src.cache import cache_manager
+            cache_manager.clear()
+            
+            # Log the action
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.insert(tk.END, "Cache cleared successfully.\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state=tk.DISABLED)
+            
+            messagebox.showinfo("Cache Cleared", "Cache has been cleared successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to clear cache: {str(e)}")
+            logging.error(f"Failed to clear cache: {str(e)}")
+    
     def _start_screening(self):
         """Start the screening process"""
         try:
@@ -536,6 +704,12 @@ class GUIApp:
 
     def _init_backtest_tab(self):
         """Initialize the backtesting tab"""
+        # Info label
+        info_label = ttk.Label(self.backtest_tab, 
+                             text="Backtest uses your current screening settings (filters, weights, etc.)",
+                             font=('TkDefaultFont', 9, 'italic'))
+        info_label.pack(padx=10, pady=5)
+        
         # Create main frame
         frame = ttk.LabelFrame(self.backtest_tab, text="Backtesting Configuration")
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -579,6 +753,9 @@ class GUIApp:
     def _run_backtest(self):
         """Run a backtest with the current settings"""
         try:
+            # First save current settings to ensure backtest uses them
+            self._save_settings()
+            
             # Disable buttons during processing
             self.run_backtest_button.config(state=tk.DISABLED)
             self.view_graphs_button.config(state=tk.DISABLED)
@@ -586,7 +763,11 @@ class GUIApp:
             # Clear previous results
             self.backtest_results_text.config(state=tk.NORMAL)
             self.backtest_results_text.delete(1.0, tk.END)
-            self.backtest_results_text.insert(tk.END, "Running backtest...\n")
+            self.backtest_results_text.insert(tk.END, "Running backtest with current screening settings...\n")
+            self.backtest_results_text.insert(tk.END, f"  Growth weight: {self.config_vars['growth_quality_weight'].get():.2f}\n")
+            self.backtest_results_text.insert(tk.END, f"  Risk weight: {self.config_vars['risk_quality_weight'].get():.2f}\n")
+            self.backtest_results_text.insert(tk.END, f"  Valuation weight: {self.config_vars['valuation_weight'].get():.2f}\n")
+            self.backtest_results_text.insert(tk.END, f"  Sentiment weight: {self.config_vars['sentiment_weight'].get():.2f}\n\n")
             self.backtest_results_text.config(state=tk.DISABLED)
             
             # Get parameters
@@ -682,6 +863,143 @@ class GUIApp:
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open graphs: {str(e)}")
+    
+    def _save_custom_profile(self):
+        """Save current settings as a custom profile"""
+        try:
+            # Ask user for profile location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                title="Save Custom Profile"
+            )
+            
+            if not file_path:
+                return
+            
+            # Prepare profile data
+            profile_data = {
+                "name": Path(file_path).stem,
+                "description": "Custom profile saved from GUI",
+                "weights": {
+                    "growth": self.config_vars['growth_quality_weight'].get(),
+                    "risk": self.config_vars['risk_quality_weight'].get(),
+                    "valuation": self.config_vars['valuation_weight'].get(),
+                    "sentiment": self.config_vars['sentiment_weight'].get()
+                },
+                "screening": {
+                    "min_roe": self.config_vars['roe_avg_min'].get() / 100,
+                    "min_roa": self.config_vars.get('roa_min', DoubleVar(value=5)).get() / 100 if 'roa_min' in self.config_vars else 0.05,
+                    "min_gross_margin": self.config_vars.get('gross_margin_min', DoubleVar(value=20)).get() / 100 if 'gross_margin_min' in self.config_vars else 0.2,
+                    "min_operating_margin": self.config_vars.get('operating_margin_min', DoubleVar(value=10)).get() / 100 if 'operating_margin_min' in self.config_vars else 0.1,
+                    "market_cap": {
+                        "min_market_cap": self.config_vars['market_cap_min'].get() if self.config_vars['market_cap_min'].get() > 0 else None,
+                        "max_market_cap": self.config_vars['market_cap_max'].get() if self.config_vars['market_cap_max'].get() > 0 else None
+                    },
+                    "growth": {
+                        "min_revenue_growth": self.config_vars['revenue_growth_min_cagr'].get() / 100,
+                        "min_earnings_growth": self.config_vars['eps_growth_min_cagr'].get() / 100,
+                        "min_eps_growth": self.config_vars['eps_growth_min_cagr'].get() / 100
+                    },
+                    "risk": {
+                        "max_debt_to_equity": self.config_vars['debt_to_equity_max'].get(),
+                        "min_current_ratio": self.config_vars.get('current_ratio_min', DoubleVar(value=1.0)).get() if 'current_ratio_min' in self.config_vars else 1.0,
+                        "min_interest_coverage": self.config_vars['interest_coverage_min'].get()
+                    },
+                    "valuation": {
+                        "max_pe_ratio": self.config_vars['per_max'].get(),
+                        "max_pb_ratio": self.config_vars['pbr_max'].get(),
+                        "max_peg_ratio": self.config_vars.get('peg_max', DoubleVar(value=2.0)).get() if 'peg_max' in self.config_vars else 2.0
+                    }
+                },
+                "output": {
+                    "formats": ["excel", "text"] if self.config_vars.get('output_excel', BooleanVar(value=True)).get() else ["text"],
+                    "excel_filename": f"{self.config_vars['filename_prefix'].get()}_analysis.xlsx",
+                    "text_filename": f"{self.config_vars['filename_prefix'].get()}_analysis.txt",
+                    "include_charts": True
+                }
+            }
+            
+            # Save profile to file
+            with open(file_path, 'w') as f:
+                json.dump(profile_data, f, indent=2)
+            
+            messagebox.showinfo("Success", f"Profile saved successfully to {file_path}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save profile: {str(e)}")
+    
+    def _load_custom_profile(self):
+        """Load settings from a custom profile"""
+        try:
+            # Ask user for profile location
+            file_path = filedialog.askopenfilename(
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+                title="Load Custom Profile"
+            )
+            
+            if not file_path:
+                return
+            
+            # Load profile data
+            with open(file_path, 'r') as f:
+                profile_data = json.load(f)
+            
+            # Apply weights if present
+            if 'weights' in profile_data:
+                weights = profile_data['weights']
+                if 'growth' in weights:
+                    self.config_vars['growth_quality_weight'].set(weights['growth'])
+                if 'risk' in weights:
+                    self.config_vars['risk_quality_weight'].set(weights['risk'])
+                if 'valuation' in weights:
+                    self.config_vars['valuation_weight'].set(weights['valuation'])
+                if 'sentiment' in weights:
+                    self.config_vars['sentiment_weight'].set(weights['sentiment'])
+                
+                # Update weight sum display
+                self._update_weight_sum()
+            
+            # Apply screening criteria if present
+            if 'screening' in profile_data:
+                screening = profile_data['screening']
+                
+                # Basic filters
+                if 'min_roe' in screening:
+                    self.config_vars['roe_avg_min'].set(screening['min_roe'] * 100)
+                
+                # Market cap
+                if 'market_cap' in screening:
+                    if 'min_market_cap' in screening['market_cap'] and screening['market_cap']['min_market_cap']:
+                        self.config_vars['market_cap_min'].set(screening['market_cap']['min_market_cap'])
+                    if 'max_market_cap' in screening['market_cap'] and screening['market_cap']['max_market_cap']:
+                        self.config_vars['market_cap_max'].set(screening['market_cap']['max_market_cap'])
+                
+                # Growth
+                if 'growth' in screening:
+                    if 'min_revenue_growth' in screening['growth']:
+                        self.config_vars['revenue_growth_min_cagr'].set(screening['growth']['min_revenue_growth'] * 100)
+                    if 'min_earnings_growth' in screening['growth']:
+                        self.config_vars['eps_growth_min_cagr'].set(screening['growth']['min_earnings_growth'] * 100)
+                
+                # Risk
+                if 'risk' in screening:
+                    if 'max_debt_to_equity' in screening['risk']:
+                        self.config_vars['debt_to_equity_max'].set(screening['risk']['max_debt_to_equity'])
+                    if 'min_interest_coverage' in screening['risk']:
+                        self.config_vars['interest_coverage_min'].set(screening['risk']['min_interest_coverage'])
+                
+                # Valuation
+                if 'valuation' in screening:
+                    if 'max_pe_ratio' in screening['valuation']:
+                        self.config_vars['per_max'].set(screening['valuation']['max_pe_ratio'])
+                    if 'max_pb_ratio' in screening['valuation']:
+                        self.config_vars['pbr_max'].set(screening['valuation']['max_pb_ratio'])
+            
+            messagebox.showinfo("Success", f"Profile loaded successfully from {file_path}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load profile: {str(e)}")
 
 
 def run_gui():
